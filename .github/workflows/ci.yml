@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Verify exact revision
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+
+      - name: Run deterministic tests
+        run: npm test
+
+  requirements-review:
+    name: Requirements Review
+    if: github.event_name == 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      SUBJECT_SHA: ${{ github.event.pull_request.head.sha }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+      COPILOT_MODEL: gpt-5.3-codex
+      COPILOT_AUTO_UPDATE: "false"
+    steps:
+      - name: Checkout exact PR revision
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact revision
+        run: test "$(git rev-parse HEAD)" = "$SUBJECT_SHA"
+
+      - name: Require configured Copilot credential
+        run: test -n "$COPILOT_GITHUB_TOKEN"
+
+      - name: Install Copilot CLI
+        run: npm install -g @github/copilot
+
+      - name: Run Requirements Review
+        run: bash .github/scripts/run-requirements-review.sh
+
+      - name: Upload Requirements Review evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: requirements-review-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          path: .sousei-review/evidence.json
+          if-no-files-found: error
+          retention-days: 30
